@@ -21,7 +21,7 @@ A full-stack NLP tool that parses sentences with spaCy and NLTK and renders head
 
 - **Tech Stack:** Python, FastAPI, spaCy, NLTK, React (Vite + TypeScript)
 - **Visualization:** Custom SVG arc graph with sequential animation
-- **Features:** Single parser mode, side-by-side compare mode, POS/dep colour badge table
+- **Features:** Single parser mode, side-by-side compare mode, POS/dep badge table
 
 ---
 
