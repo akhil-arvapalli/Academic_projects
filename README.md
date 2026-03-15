@@ -1,67 +1,28 @@
-# Dependency Parser Visualization
+# Academic Projects
+A collection of academic projects by Akhil Arvapalli.
 
-A React + FastAPI NLP project that parses sentences and visualizes dependency relationships.
+## Projects
 
-## Features
+### ??? [SENTINEL](./SENTINEL/)
+**Satellite Environmental Terrain Intelligence Evaluation**
 
-- Parse sentences with **spaCy** (true dependency parse)
-- Parse sentences with **NLTK** (lightweight heuristic dependency approximation)
-- Interactive dependency arc visualization in React
-- Token detail table with lemma, POS, head, and dependency label
-- ReactBits-inspired visual style with animated hero and polished controls
+A deep learning-powered satellite image classification system with a military tactical HUD interface. Classifies satellite imagery into 4 terrain types: Urban, Agricultural, Range, and Forest land.
 
-## Project Structure
+- **Tech Stack:** Python, TensorFlow/Keras, Flask, React (Vite), Recharts
+- **Model:** Enhanced CNN v2 with BatchNorm, Data Augmentation, Early Stopping
+- **UI:** Military-themed dark HUD with animated components
 
-- `frontend/` - React (Vite + TypeScript) UI
-- `backend/` - FastAPI parser API
+---
 
-## Prerequisites
+### ?? [DepViz — Dependency Parser Visualization](./nlp/)
+**NLP Sentence Structure Visualizer**
 
-- Node.js 18+
-- Python 3.10+
+A full-stack NLP tool that parses sentences with spaCy and NLTK and renders head–dependent arcs in an animated interactive canvas.
 
-## Backend Setup
+- **Tech Stack:** Python, FastAPI, spaCy, NLTK, React (Vite + TypeScript)
+- **Visualization:** Custom SVG arc graph with sequential animation
+- **Features:** Single parser mode, side-by-side compare mode, POS/dep badge table
 
-```bash
-cd backend
-python -m venv ../.venv
-../.venv/Scripts/python -m pip install -r requirements.txt
-../.venv/Scripts/python -m spacy download en_core_web_sm
-../.venv/Scripts/python -m uvicorn app.main:app --reload
-```
+---
 
-Backend runs on `http://127.0.0.1:8000`.
-
-## Frontend Setup
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend runs on `http://127.0.0.1:5173`.
-
-## API
-
-### `POST /parse`
-
-Request body:
-
-```json
-{
-  "text": "The quick brown fox jumps over the lazy dog.",
-  "parser": "spacy"
-}
-```
-
-`parser` can be `spacy` or `nltk`.
-
-### `GET /health`
-
-Returns service health status.
-
-## Notes
-
-- `spaCy` mode returns real dependency labels from model output.
-- `NLTK` mode is a heuristic approximation intended for educational comparison.
+*More projects coming soon.*
