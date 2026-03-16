@@ -6,14 +6,34 @@ import os
 
 # ── Paths ────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(BASE_DIR, "model")
-SAMPLE_DIR = os.path.join(BASE_DIR, "sampleImages")
-DATASET_DIR = os.path.join(BASE_DIR, "Dataset")
 
-WEIGHTS_PATH = os.path.join(MODEL_DIR, "model_weights.h5")
-FEATURES_X_PATH = os.path.join(MODEL_DIR, "X.txt.npy")
-FEATURES_Y_PATH = os.path.join(MODEL_DIR, "Y.txt.npy")
-HISTORY_PATH = os.path.join(MODEL_DIR, "history.pckl")
+
+def _resolve_path(env_key: str, default_rel_path: str) -> str:
+	value = os.getenv(env_key, default_rel_path)
+	if os.path.isabs(value):
+		return value
+	return os.path.join(BASE_DIR, value)
+
+
+MODEL_DIR = _resolve_path("MODEL_DIR", "model")
+SAMPLE_DIR = _resolve_path("SAMPLE_DIR", "sampleImages")
+DATASET_DIR = _resolve_path("DATASET_DIR", "Dataset")
+
+FEATURES_X_FILE = os.getenv("FEATURES_X_FILE", "X.txt.npy")
+FEATURES_Y_FILE = os.getenv("FEATURES_Y_FILE", "Y.txt.npy")
+WEIGHTS_FILE = os.getenv("WEIGHTS_FILE", "model_weights.h5")
+WEIGHTS_V2_FILE = os.getenv("WEIGHTS_V2_FILE", "model_weights_v2.h5")
+HISTORY_FILE = os.getenv("HISTORY_FILE", "history.pckl")
+HISTORY_V2_FILE = os.getenv("HISTORY_V2_FILE", "history_v2.pckl")
+METRICS_V2_FILE = os.getenv("METRICS_V2_FILE", "metrics_v2.pckl")
+
+WEIGHTS_PATH = os.path.join(MODEL_DIR, WEIGHTS_FILE)
+WEIGHTS_V2_PATH = os.path.join(MODEL_DIR, WEIGHTS_V2_FILE)
+FEATURES_X_PATH = os.path.join(MODEL_DIR, FEATURES_X_FILE)
+FEATURES_Y_PATH = os.path.join(MODEL_DIR, FEATURES_Y_FILE)
+HISTORY_PATH = os.path.join(MODEL_DIR, HISTORY_FILE)
+HISTORY_V2_PATH = os.path.join(MODEL_DIR, HISTORY_V2_FILE)
+METRICS_V2_PATH = os.path.join(MODEL_DIR, METRICS_V2_FILE)
 
 # ── Theme Colors ─────────────────────────────────────────
 BG_PRIMARY = "#0a0e17"          # Deep dark navy

@@ -118,8 +118,8 @@ class SatelliteClassifier:
 
     def load_features(self):
         """Load pre-extracted features from .npy files."""
-        x_path = os.path.join(self.model_dir, "X.txt.npy")
-        y_path = os.path.join(self.model_dir, "Y.txt.npy")
+        x_path = os.path.join(self.model_dir, config.FEATURES_X_FILE)
+        y_path = os.path.join(self.model_dir, config.FEATURES_Y_FILE)
 
         if not os.path.exists(x_path) or not os.path.exists(y_path):
             raise FileNotFoundError("Feature files not found in model directory.")
@@ -152,8 +152,8 @@ class SatelliteClassifier:
 
     def load_weights(self):
         """Build model and load pre-trained weights (tries v2 first, then legacy)."""
-        v2_path = os.path.join(self.model_dir, "model_weights_v2.h5")
-        legacy_path = os.path.join(self.model_dir, "model_weights.h5")
+        v2_path = os.path.join(self.model_dir, config.WEIGHTS_V2_FILE)
+        legacy_path = os.path.join(self.model_dir, config.WEIGHTS_FILE)
 
         # Try v2 weights first
         if os.path.exists(v2_path):
@@ -180,8 +180,8 @@ class SatelliteClassifier:
     def _load_history(self):
         """Load training history from pickle file."""
         # Try v2 history first
-        v2_hist = os.path.join(self.model_dir, "history_v2.pckl")
-        legacy_hist = os.path.join(self.model_dir, "history.pckl")
+        v2_hist = os.path.join(self.model_dir, config.HISTORY_V2_FILE)
+        legacy_hist = os.path.join(self.model_dir, config.HISTORY_FILE)
 
         path = v2_hist if os.path.exists(v2_hist) else legacy_hist
         if os.path.exists(path):
@@ -194,7 +194,7 @@ class SatelliteClassifier:
 
     def _load_metrics(self):
         """Load confusion matrix and classification report."""
-        metrics_path = os.path.join(self.model_dir, "metrics_v2.pckl")
+        metrics_path = os.path.join(self.model_dir, config.METRICS_V2_FILE)
         if os.path.exists(metrics_path):
             with open(metrics_path, "rb") as f:
                 data = pickle.load(f)
@@ -288,10 +288,10 @@ class SatelliteClassifier:
             )
 
         # ── Save weights and history ──
-        weights_path = os.path.join(self.model_dir, "model_weights_v2.h5")
+        weights_path = os.path.join(self.model_dir, config.WEIGHTS_V2_FILE)
         self.model.save_weights(weights_path)
 
-        with open(os.path.join(self.model_dir, "history_v2.pckl"), "wb") as f:
+        with open(os.path.join(self.model_dir, config.HISTORY_V2_FILE), "wb") as f:
             pickle.dump(hist.history, f)
 
         self.history = hist.history
@@ -332,7 +332,7 @@ class SatelliteClassifier:
         self._class_report = report
 
         # Save metrics
-        metrics_path = os.path.join(self.model_dir, "metrics_v2.pckl")
+        metrics_path = os.path.join(self.model_dir, config.METRICS_V2_FILE)
         with open(metrics_path, "wb") as f:
             pickle.dump({
                 "confusion_matrix": self._confusion_matrix,
