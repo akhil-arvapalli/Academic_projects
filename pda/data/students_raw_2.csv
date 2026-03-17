@@ -1,0 +1,11 @@
+student_id,roll_no,full_name,email,phone,dob,class_section,address
+101,CSE101,Asha Nair,asha.nair@example.com,9876500011,2004-02-11,CSE-A,Hyderabad
+102,CSE102,Rohan Das,rohan.das@example.com,9876500022,2003-12-19,CSE-A,Vijayawada
+103,CSE103,Meera Iyer,meera.iyer@example.com,9876500033,2004-05-23,CSE-B,Guntur
+104,CSE104,Karthik Rao,karthik.rao@example.com,9876500044,2004-01-08,CSE-B,Warangal
+105,CSE105,Asha  Nair,ASHA.NAIR@example.com,+91 98765 00011,2004-02-11,CSE-A,Hyderabad
+106,CSE106,Rohan Daas,rohan.das@example.com,9876500022,2003-12-19,CSE-A,Vijayawada
+107,CSE107,Meera Iyer,meera.iyer@example.com,9876500033,2004-05-23,CSE-B,Guntur
+108,CSE108,Sneha Paul,sneha.paul@example.com,9876500088,2003-10-30,CSE-C,Nellore
+109,CSE109,Karthik Rao,karthik.rao@exampl.com,9876500044,2004-01-08,CSE-B,Warangal
+110,CSE110,Aditya Jain,aditya.jain@example.com,9876500100,2004-08-16,CSE-C,Khammam

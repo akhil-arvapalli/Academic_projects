@@ -1,0 +1,19 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run student dedup pipeline",
+			"type": "shell",
+			"command": "d:/C M R/sem 6/Academic_projects/pda/.venv/Scripts/python.exe",
+			"args": [
+				"-m",
+				"src.main",
+				"--input",
+				"data/students_raw.csv",
+				"--out",
+				"reports"
+			],
+			"isBackground": false
+		}
+	]
+}
