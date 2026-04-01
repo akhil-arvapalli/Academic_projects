@@ -33,12 +33,13 @@ frontend/dist/
 
 # Model weights & data (too large for git)
 *.h5
+*.weights.h5
 *.npy
 *.pckl
 *.keras
 model/model.json
-model/model_weights.h5
-model/model_weights_v2.h5
+model/model_weights.weights.h5
+model/model_weights_v2.weights.h5
 model/X.txt.npy
 model/Y.txt.npy
 model/history.pckl
@@ -59,3 +60,6 @@ model/Dataset/
 
 # Logs
 *.log
+
+# Local-only docs (do not commit)
+local_docs/
