@@ -6,11 +6,16 @@ Confusion Matrix, and Per-Class Metrics.
 import os
 import pickle
 import numpy as np
+import math
+import tensorflow as tf
 from tensorflow.keras.layers import (
     Conv2D, MaxPooling2D, Dense, Flatten, Dropout,
-    Input, BatchNormalization
+    Input, BatchNormalization, GlobalAveragePooling2D
 )
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.applications import EfficientNetB0
+from tensorflow.keras.applications.efficientnet import preprocess_input as efficientnet_preprocess_input
+from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.callbacks import Callback, EarlyStopping, ReduceLROnPlateau
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
@@ -43,19 +48,39 @@ class SatelliteClassifier:
     def __init__(self, model_dir=None):
         self.model_dir = model_dir or config.MODEL_DIR
         self.model = None
+        self.model_type = "cnn"
         self.history = None
         self.is_loaded = False
         self.accuracy = 0.0
         self.val_accuracy = 0.0
         self.X = None
         self.Y = None
+        self._loaded_input_size = None
         self._confusion_matrix = None
         self._class_report = None
         self._model_version = "v2"  # Track model version
+        self._backbone = None
 
     # ── Model Architecture ──────────────────────────────────
 
-    def build_model(self):
+    def _get_input_size(self, model_type=None):
+        """Return input image size based on selected model type."""
+        mtype = model_type or self.model_type or "cnn"
+        if mtype == "efficientnet":
+            return (224, 224)
+        return config.IMAGE_SIZE
+
+    def build_model(self, model_type="cnn"):
+        """Build model architecture based on selected model type."""
+        if model_type == "cnn":
+            self.model_type = "cnn"
+            return self._build_cnn()
+        if model_type == "efficientnet":
+            self.model_type = "efficientnet"
+            return self.build_efficientnet()
+        raise ValueError(f"Unsupported model_type: {model_type}")
+
+    def _build_cnn(self):
         """
         Build enhanced CNN architecture.
         3 Conv blocks with increasing filters + BatchNorm + Dropout.
@@ -98,6 +123,26 @@ class SatelliteClassifier:
         self.model = model
         return model
 
+    def build_efficientnet(self):
+        """Build EfficientNetB0 transfer-learning classifier."""
+        base_model = EfficientNetB0(
+            include_top=False,
+            weights="imagenet",
+            input_shape=(224, 224, 3),
+        )
+        # Freeze backbone for a stable default; can be fine-tuned later.
+        base_model.trainable = False
+        self._backbone = base_model
+
+        x = GlobalAveragePooling2D()(base_model.output)
+        x = Dense(256, activation="relu")(x)
+        x = Dropout(0.5)(x)
+        output = Dense(config.NUM_CLASSES, activation="softmax")(x)
+
+        model = Model(inputs=base_model.input, outputs=output)
+        self.model = model
+        return model
+
     def build_legacy_model(self):
         """Build the original simple CNN (for loading old weights)."""
         model = Sequential([
@@ -112,11 +157,12 @@ class SatelliteClassifier:
             Dense(config.NUM_CLASSES, activation="softmax"),
         ])
         self.model = model
+        self.model_type = "cnn"
         return model
 
     # ── Data Loading ────────────────────────────────────────
 
-    def load_features(self):
+    def load_features(self, model_type=None):
         """Load pre-extracted features from .npy files."""
         x_path = os.path.join(self.model_dir, config.FEATURES_X_FILE)
         y_path = os.path.join(self.model_dir, config.FEATURES_Y_FILE)
@@ -127,15 +173,29 @@ class SatelliteClassifier:
         self.X = np.load(x_path)
         self.Y = np.load(y_path)
 
+        if model_type:
+            self.model_type = model_type
+
         # Normalize if not already
         if self.X.max() > 1.0:
             self.X = self.X.astype("float32") / 255.0
+
+        target_size = self._get_input_size(model_type)
+        current_size = tuple(self.X.shape[1:3]) if self.X.ndim == 4 else None
+        if current_size != target_size:
+            import cv2
+            self.X = np.array(
+                [cv2.resize(img, target_size) for img in self.X],
+                dtype="float32",
+            )
+
+        self._loaded_input_size = tuple(self.X.shape[1:3])
 
         return self.X, self.Y
 
     # ── Data Augmentation ───────────────────────────────────
 
-    def _get_augmentor(self):
+    def _get_augmentor(self, preprocessing_function=None):
         """Create image data augmentation generator."""
         return ImageDataGenerator(
             rotation_range=20,
@@ -146,31 +206,80 @@ class SatelliteClassifier:
             zoom_range=0.15,
             brightness_range=[0.8, 1.2],
             fill_mode="nearest",
+            preprocessing_function=preprocessing_function,
         )
 
     # ── Weight Management ───────────────────────────────────
 
-    def load_weights(self):
-        """Build model and load pre-trained weights (tries v2 first, then legacy)."""
-        v2_path = os.path.join(self.model_dir, config.WEIGHTS_V2_FILE)
-        legacy_path = os.path.join(self.model_dir, config.WEIGHTS_FILE)
+    def load_weights(self, preferred_model_type=None):
+        """Build model and load pre-trained weights.
 
-        # Try v2 weights first
-        if os.path.exists(v2_path):
-            if self.model is None:
-                self.build_model()
-            self.model.load_weights(v2_path)
-            self._model_version = "v2"
-            self.is_loaded = True
-            self._load_history()
-            self._load_metrics()
-            return True
+        Args:
+            preferred_model_type: Optional explicit model choice ("cnn" or "efficientnet").
+                If not provided, will try CNN/legacy first, then EfficientNet as a fallback.
+        """
+        preferred = (preferred_model_type or "").strip().lower() or None
+        if preferred and preferred not in {"cnn", "efficientnet"}:
+            raise ValueError(f"Unsupported model_type: {preferred_model_type}")
 
-        # Fall back to legacy weights
-        if os.path.exists(legacy_path):
+        efficientnet_candidates = [
+            ("model_weights_efficientnet_v2.weights.h5", "efficientnet_v2", "efficientnet"),
+            ("model_weights_efficientnet.weights.h5", "efficientnet", "efficientnet"),
+            ("model_weights_efficientnet.h5", "efficientnet", "efficientnet"),
+        ]
+
+        cnn_candidates = [
+            (config.WEIGHTS_V2_FILE, "v2", "cnn"),
+            ("model_weights_v3.weights.h5", "v3", "cnn"),
+            ("model_weights_v2.weights.h5", "v2", "cnn"),
+        ]
+
+        legacy_candidates = [
+            (config.WEIGHTS_FILE, "legacy", "legacy"),
+            ("model_weights.weights.h5", "legacy", "legacy"),
+            ("model_weights.h5", "legacy", "legacy"),
+        ]
+
+        if preferred == "efficientnet":
+            candidates = efficientnet_candidates
+        elif preferred == "cnn":
+            candidates = cnn_candidates + legacy_candidates
+        else:
+            candidates = cnn_candidates + efficientnet_candidates + legacy_candidates
+
+        seen = set()
+        for file_name, version, arch in candidates:
+            if file_name in seen:
+                continue
+            seen.add(file_name)
+
+            path = os.path.join(self.model_dir, file_name)
+            if not os.path.exists(path):
+                continue
+
+            if arch == "efficientnet":
+                self.build_model("efficientnet")
+                self.model.load_weights(path)
+                self._model_version = version
+                self.is_loaded = True
+                self._load_history()
+                self._load_metrics()
+                return True
+
+            if arch == "cnn":
+                if self.model is None or self.model_type != "cnn" or self._model_version == "legacy":
+                    self.build_model("cnn")
+                self.model.load_weights(path)
+                self._model_version = version
+                self.is_loaded = True
+                self._load_history()
+                self._load_metrics()
+                return True
+
+            # legacy
             self.build_legacy_model()
-            self.model.load_weights(legacy_path)
-            self._model_version = "legacy"
+            self.model.load_weights(path)
+            self._model_version = version
             self.is_loaded = True
             self._load_history()
             return True
@@ -179,23 +288,55 @@ class SatelliteClassifier:
 
     def _load_history(self):
         """Load training history from pickle file."""
-        # Try v2 history first
-        v2_hist = os.path.join(self.model_dir, config.HISTORY_V2_FILE)
-        legacy_hist = os.path.join(self.model_dir, config.HISTORY_FILE)
+        if self.model_type == "efficientnet" or self._model_version in {"efficientnet", "efficientnet_v2"}:
+            history_files = [
+                "history_efficientnet_v2.pckl",
+                "history_efficientnet.pckl",
+                "history_v3.pckl",
+                config.HISTORY_V2_FILE,
+                config.HISTORY_FILE,
+            ]
+        elif self._model_version == "v3":
+            history_files = ["history_v3.pckl", config.HISTORY_V2_FILE, config.HISTORY_FILE]
+        elif self._model_version == "v2":
+            history_files = [config.HISTORY_V2_FILE, "history_v3.pckl", config.HISTORY_FILE]
+        else:
+            history_files = [config.HISTORY_FILE, config.HISTORY_V2_FILE, "history_v3.pckl", "history_efficientnet.pckl"]
 
-        path = v2_hist if os.path.exists(v2_hist) else legacy_hist
-        if os.path.exists(path):
+        path = None
+        for file_name in history_files:
+            candidate = os.path.join(self.model_dir, file_name)
+            if os.path.exists(candidate):
+                path = candidate
+                break
+
+        if path:
             with open(path, "rb") as f:
                 self.history = pickle.load(f)
             if "accuracy" in self.history:
-                self.accuracy = self.history["accuracy"][-1] * 100
+                self.accuracy = max(self.history["accuracy"]) * 100
             if "val_accuracy" in self.history:
-                self.val_accuracy = self.history["val_accuracy"][-1] * 100
+                self.val_accuracy = max(self.history["val_accuracy"]) * 100
 
     def _load_metrics(self):
         """Load confusion matrix and classification report."""
-        metrics_path = os.path.join(self.model_dir, config.METRICS_V2_FILE)
-        if os.path.exists(metrics_path):
+        if self.model_type == "efficientnet" or self._model_version in {"efficientnet", "efficientnet_v2"}:
+            metrics_files = [
+                "metrics_efficientnet_v2.pckl",
+                "metrics_efficientnet.pckl",
+                "metrics_v3.pckl",
+                config.METRICS_V2_FILE,
+            ]
+        else:
+            metrics_files = ["metrics_v3.pckl", config.METRICS_V2_FILE, "metrics_efficientnet_v2.pckl", "metrics_efficientnet.pckl"]
+        metrics_path = None
+        for file_name in metrics_files:
+            candidate = os.path.join(self.model_dir, file_name)
+            if os.path.exists(candidate):
+                metrics_path = candidate
+                break
+
+        if metrics_path:
             with open(metrics_path, "rb") as f:
                 data = pickle.load(f)
                 self._confusion_matrix = data.get("confusion_matrix")
@@ -204,7 +345,7 @@ class SatelliteClassifier:
     # ── Training ────────────────────────────────────────────
 
     def train(self, epochs=None, batch_size=None, use_augmentation=True,
-              validation_split=0.2, progress_callback=None):
+              validation_split=0.2, progress_callback=None, model_type="cnn"):
         """
         Train the enhanced CNN model.
 
@@ -214,20 +355,38 @@ class SatelliteClassifier:
             use_augmentation: Enable data augmentation
             validation_split: Fraction for validation set (0 to disable)
             progress_callback: Keras callback for UI progress
+            model_type: "cnn" (default) or "efficientnet"
         """
-        if self.X is None or self.Y is None:
-            raise ValueError("Features not loaded. Call load_features() first.")
+        self.model_type = model_type or "cnn"
+        target_size = self._get_input_size(self.model_type)
 
-        if self.model is None:
-            self.build_model()
+        if (
+            self.X is None
+            or self.Y is None
+            or self._loaded_input_size != target_size
+        ):
+            self.load_features(model_type=self.model_type)
+
+        # Always build from the selected architecture before training.
+        self.build_model(self.model_type)
 
         epochs = epochs or config.EPOCHS
         batch_size = batch_size or config.BATCH_SIZE
-        Y_cat = to_categorical(self.Y, num_classes=config.NUM_CLASSES)
+        y_int = self.Y.astype(int)
+
+        is_efficientnet = self.model_type == "efficientnet"
+        # EfficientNet v2 training: apply correct preprocessing and fine-tune top layers.
+        efficientnet_v2 = is_efficientnet
+
+        loss_fn = (
+            tf.keras.losses.CategoricalCrossentropy(label_smoothing=0.05)
+            if efficientnet_v2
+            else "categorical_crossentropy"
+        )
 
         self.model.compile(
-            optimizer="adam",
-            loss="categorical_crossentropy",
+            optimizer=Adam(learning_rate=1e-3),
+            loss=loss_fn,
             metrics=["accuracy"],
         )
 
@@ -236,82 +395,264 @@ class SatelliteClassifier:
         if progress_callback:
             callbacks.append(progress_callback)
 
-        # Early stopping: stop if val_loss doesn't improve for 5 epochs
+        # Early stopping: EfficientNet tends to benefit from optimizing for best val accuracy.
         if validation_split > 0:
-            callbacks.append(EarlyStopping(
-                monitor="val_loss",
-                patience=5,
-                restore_best_weights=True,
-                verbose=0,
-            ))
+            if efficientnet_v2:
+                callbacks.append(EarlyStopping(
+                    monitor="val_accuracy",
+                    mode="max",
+                    patience=8,
+                    restore_best_weights=True,
+                    verbose=0,
+                ))
+            else:
+                callbacks.append(EarlyStopping(
+                    monitor="val_loss",
+                    patience=5,
+                    restore_best_weights=True,
+                    verbose=0,
+                ))
             callbacks.append(ReduceLROnPlateau(
-                monitor="val_loss",
+                monitor="val_accuracy" if efficientnet_v2 else "val_loss",
+                mode="max" if efficientnet_v2 else "auto",
                 factor=0.5,
                 patience=3,
                 min_lr=1e-6,
                 verbose=0,
             ))
 
-        # ── Split data ──
+        # ── Split data (keep integer labels for class balancing) ──
         if validation_split > 0:
-            X_train, X_val, Y_train, Y_val = train_test_split(
-                self.X, Y_cat,
+            X_train, X_val, y_train_int, y_val_int = train_test_split(
+                self.X, y_int,
                 test_size=validation_split,
                 random_state=42,
-                stratify=self.Y,
+                stratify=y_int,
             )
+            Y_train = to_categorical(y_train_int, num_classes=config.NUM_CLASSES)
+            Y_val = to_categorical(y_val_int, num_classes=config.NUM_CLASSES)
             validation_data = (X_val, Y_val)
         else:
-            X_train, Y_train = self.X, Y_cat
+            X_train, y_train_int = self.X, y_int
+            Y_train = to_categorical(y_train_int, num_classes=config.NUM_CLASSES)
+            X_val, Y_val, y_val_int = None, None, None
             validation_data = None
 
+        # ── Class balancing (EfficientNet only) ──
+        sample_weight_train = None
+        if efficientnet_v2:
+            class_counts = np.bincount(y_train_int, minlength=config.NUM_CLASSES).astype("float32")
+            class_counts[class_counts == 0] = 1.0
+            class_weights = float(len(y_train_int)) / (config.NUM_CLASSES * class_counts)
+            sample_weight_train = class_weights[y_train_int]
+
         # ── Train ──
-        if use_augmentation:
-            augmentor = self._get_augmentor()
-            hist = self.model.fit(
-                augmentor.flow(X_train, Y_train, batch_size=batch_size),
-                steps_per_epoch=len(X_train) // batch_size,
-                epochs=epochs,
-                validation_data=validation_data,
-                callbacks=callbacks,
-                verbose=0,
-            )
-        else:
-            hist = self.model.fit(
-                X_train, Y_train,
+        def _effnet_preprocess_from_0_1(x):
+            # Our pipeline stores images in [0,1]; EfficientNet preprocess expects [0,255].
+            return efficientnet_preprocess_input(x * 255.0)
+
+        preprocessing_fn = _effnet_preprocess_from_0_1 if efficientnet_v2 else None
+
+        def _fit(epochs_to_run, initial_epoch=0):
+            if epochs_to_run <= 0:
+                return None
+
+            # Keep the classic CNN path unchanged.
+            if use_augmentation and not efficientnet_v2:
+                augmentor = self._get_augmentor()
+                steps = max(1, math.ceil(len(X_train) / batch_size))
+                return self.model.fit(
+                    augmentor.flow(X_train, Y_train, batch_size=batch_size),
+                    steps_per_epoch=steps,
+                    epochs=initial_epoch + epochs_to_run,
+                    initial_epoch=initial_epoch,
+                    validation_data=validation_data,
+                    callbacks=callbacks,
+                    verbose=0,
+                )
+
+            if use_augmentation:
+                # Keras 3 can treat python iterators as finite and "run out of data".
+                # Use a repeating tf.data pipeline so training always has enough batches.
+                aug = tf.keras.Sequential(
+                    [
+                        tf.keras.layers.RandomFlip("horizontal_and_vertical"),
+                        tf.keras.layers.RandomRotation(0.08),
+                        tf.keras.layers.RandomZoom(0.12),
+                        tf.keras.layers.RandomTranslation(0.12, 0.12),
+                        tf.keras.layers.RandomContrast(0.12),
+                    ],
+                    name="augmentation",
+                )
+
+                def _mixup(images, labels, sample_weights, alpha=0.2):
+                    # MixUp regularization helps small datasets generalize better.
+                    images = tf.cast(images, tf.float32)
+                    labels = tf.cast(labels, tf.float32)
+                    sample_weights = tf.cast(sample_weights, tf.float32)
+
+                    batch_n = tf.shape(images)[0]
+                    shuffle_idx = tf.random.shuffle(tf.range(batch_n))
+
+                    images_b = tf.gather(images, shuffle_idx)
+                    labels_b = tf.gather(labels, shuffle_idx)
+                    sw_b = tf.gather(sample_weights, shuffle_idx)
+
+                    gamma_1 = tf.random.gamma(shape=[batch_n], alpha=alpha)
+                    gamma_2 = tf.random.gamma(shape=[batch_n], alpha=alpha)
+                    lam = gamma_1 / (gamma_1 + gamma_2 + 1e-8)
+                    lam = tf.cast(lam, tf.float32)
+
+                    lam_x = tf.reshape(lam, (-1, 1, 1, 1))
+                    lam_y = tf.reshape(lam, (-1, 1))
+
+                    mixed_images = lam_x * images + (1.0 - lam_x) * images_b
+                    mixed_labels = lam_y * labels + (1.0 - lam_y) * labels_b
+                    mixed_sw = lam * sample_weights + (1.0 - lam) * sw_b
+                    return mixed_images, mixed_labels, mixed_sw
+
+                def _prep_train(x, y, sw):
+                    x = tf.cast(x, tf.float32)
+                    y = tf.cast(y, tf.float32)
+                    x = aug(x, training=True)
+                    x, y, sw = _mixup(x, y, tf.cast(sw, tf.float32), alpha=0.2)
+                    if preprocessing_fn:
+                        # preprocessing_fn expects [0,1] and converts to EfficientNet space
+                        x = tf.cast(x, tf.float32)
+                        x = efficientnet_preprocess_input(x * 255.0)
+                    return x, y, sw
+
+                def _prep_val(x, y):
+                    x = tf.cast(x, tf.float32)
+                    y = tf.cast(y, tf.float32)
+                    if preprocessing_fn:
+                        x = efficientnet_preprocess_input(x * 255.0)
+                    return x, y
+
+                train_ds = (
+                    tf.data.Dataset.from_tensor_slices((X_train, Y_train, sample_weight_train))
+                    .shuffle(buffer_size=max(1, len(X_train)), seed=42, reshuffle_each_iteration=True)
+                    .batch(batch_size)
+                    .map(_prep_train, num_parallel_calls=tf.data.AUTOTUNE)
+                    .prefetch(tf.data.AUTOTUNE)
+                    .repeat()
+                )
+
+                if validation_data is not None:
+                    val_ds = (
+                        tf.data.Dataset.from_tensor_slices((X_val, Y_val))
+                        .batch(batch_size)
+                        .map(_prep_val, num_parallel_calls=tf.data.AUTOTUNE)
+                        .prefetch(tf.data.AUTOTUNE)
+                    )
+                else:
+                    val_ds = None
+
+                steps = max(1, math.ceil(len(X_train) / batch_size))
+                return self.model.fit(
+                    train_ds,
+                    steps_per_epoch=steps,
+                    epochs=initial_epoch + epochs_to_run,
+                    initial_epoch=initial_epoch,
+                    validation_data=val_ds,
+                    callbacks=callbacks,
+                    verbose=0,
+                )
+
+            # No augmentation: preprocess in-memory for EfficientNet v2.
+            X_train_in = preprocessing_fn(X_train) if preprocessing_fn else X_train
+            if validation_data is not None:
+                X_val_in = preprocessing_fn(X_val) if preprocessing_fn else X_val
+                vdata = (X_val_in, Y_val)
+            else:
+                vdata = None
+
+            return self.model.fit(
+                X_train_in, Y_train,
                 batch_size=batch_size,
-                epochs=epochs,
-                validation_data=validation_data,
+                epochs=initial_epoch + epochs_to_run,
+                initial_epoch=initial_epoch,
+                validation_data=vdata,
+                sample_weight=sample_weight_train if efficientnet_v2 else None,
                 shuffle=True,
                 callbacks=callbacks,
                 verbose=0,
             )
 
+        # Phase 1: warm-up head (backbone frozen)
+        warmup_epochs = min(5, max(1, epochs // 3)) if efficientnet_v2 else epochs
+        hist1 = _fit(warmup_epochs, initial_epoch=0)
+
+        # Phase 2: fine-tune last layers (EfficientNet only)
+        hist2 = None
+        if efficientnet_v2 and epochs > warmup_epochs and self._backbone is not None:
+            fine_tune_epochs = epochs - warmup_epochs
+
+            # Unfreeze a subset of layers for gentle fine-tuning
+            self._backbone.trainable = True
+            unfreeze_last = 30
+            if unfreeze_last < len(self._backbone.layers):
+                for layer in self._backbone.layers[:-unfreeze_last]:
+                    layer.trainable = False
+
+            self.model.compile(
+                optimizer=Adam(learning_rate=1e-5),
+                loss=loss_fn,
+                metrics=["accuracy"],
+            )
+
+            hist2 = _fit(fine_tune_epochs, initial_epoch=warmup_epochs)
+
+        # Merge histories
+        history = {}
+        for key in (hist1.history.keys() if hist1 else []):
+            history[key] = list(hist1.history.get(key, []))
+        if hist2:
+            for key, values in hist2.history.items():
+                history.setdefault(key, [])
+                history[key].extend(values)
+
         # ── Save weights and history ──
-        weights_path = os.path.join(self.model_dir, config.WEIGHTS_V2_FILE)
+        weights_file = (
+            "model_weights_efficientnet_v2.weights.h5"
+            if self.model_type == "efficientnet"
+            else config.WEIGHTS_V2_FILE
+        )
+        history_file = (
+            "history_efficientnet_v2.pckl"
+            if self.model_type == "efficientnet"
+            else config.HISTORY_V2_FILE
+        )
+
+        weights_path = os.path.join(self.model_dir, weights_file)
         self.model.save_weights(weights_path)
 
-        with open(os.path.join(self.model_dir, config.HISTORY_V2_FILE), "wb") as f:
-            pickle.dump(hist.history, f)
+        with open(os.path.join(self.model_dir, history_file), "wb") as f:
+            pickle.dump(history, f)
 
-        self.history = hist.history
-        self.accuracy = hist.history["accuracy"][-1] * 100
-        if "val_accuracy" in hist.history:
-            self.val_accuracy = hist.history["val_accuracy"][-1] * 100
+        self.history = history
+        self.accuracy = max(history.get("accuracy", [0.0])) * 100
+        if "val_accuracy" in history:
+            self.val_accuracy = max(history["val_accuracy"]) * 100
+        else:
+            self.val_accuracy = 0.0
         self.is_loaded = True
-        self._model_version = "v2"
+        self._model_version = "efficientnet_v2" if self.model_type == "efficientnet" else "v2"
 
         # ── Compute confusion matrix on validation set ──
         if validation_data is not None:
             self._compute_metrics(X_val, Y_val)
 
-        return hist.history
+        return history
 
     # ── Metrics ─────────────────────────────────────────────
 
     def _compute_metrics(self, X_val, Y_val):
         """Compute confusion matrix and per-class metrics on validation data."""
-        preds = self.model.predict(X_val, verbose=0)
+        X_val_in = X_val
+        if self.model_type == "efficientnet" and self._model_version == "efficientnet_v2":
+            X_val_in = efficientnet_preprocess_input(X_val * 255.0)
+        preds = self.model.predict(X_val_in, verbose=0)
         y_pred = np.argmax(preds, axis=1)
         y_true = np.argmax(Y_val, axis=1)
 
@@ -332,7 +673,12 @@ class SatelliteClassifier:
         self._class_report = report
 
         # Save metrics
-        metrics_path = os.path.join(self.model_dir, config.METRICS_V2_FILE)
+        metrics_file = (
+            "metrics_efficientnet_v2.pckl"
+            if self.model_type == "efficientnet"
+            else config.METRICS_V2_FILE
+        )
+        metrics_path = os.path.join(self.model_dir, metrics_file)
         with open(metrics_path, "wb") as f:
             pickle.dump({
                 "confusion_matrix": self._confusion_matrix,
@@ -363,8 +709,11 @@ class SatelliteClassifier:
             raise RuntimeError("Model not loaded. Call load_weights() or train() first.")
 
         import cv2
-        img = cv2.resize(image, config.IMAGE_SIZE)
+        img = cv2.resize(image, self._get_input_size())
         img = img.astype("float32") / 255.0
+
+        if self.model_type == "efficientnet" and self._model_version == "efficientnet_v2":
+            img = efficientnet_preprocess_input(img * 255.0)
         img = np.expand_dims(img, axis=0)
 
         preds = self.model.predict(img, verbose=0)
@@ -398,8 +747,10 @@ class SatelliteClassifier:
         import cv2
         processed = []
         for img in images:
-            resized = cv2.resize(img, config.IMAGE_SIZE)
+            resized = cv2.resize(img, self._get_input_size())
             resized = resized.astype("float32") / 255.0
+            if self.model_type == "efficientnet" and self._model_version == "efficientnet_v2":
+                resized = efficientnet_preprocess_input(resized * 255.0)
             processed.append(resized)
 
         batch = np.array(processed)
@@ -444,9 +795,14 @@ class SatelliteClassifier:
             return None
         return {
             "version": self._model_version,
+            "model_type": self.model_type,
             "total_params": int(self.model.count_params()),
             "num_layers": len(self.model.layers),
             "is_loaded": self.is_loaded,
             "accuracy": round(self.accuracy, 2),
             "val_accuracy": round(self.val_accuracy, 2),
         }
+
+    def get_model_type(self):
+        """Return currently selected model type."""
+        return self.model_type

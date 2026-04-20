@@ -10,6 +10,8 @@ export default function Classify({ status, addLog }) {
     const [result, setResult] = useState(null)
     const [overlayImage, setOverlayImage] = useState(null)
     const [loading, setLoading] = useState(false)
+    const [modelType, setModelType] = useState('cnn')
+    const [modelTypeTouched, setModelTypeTouched] = useState(false)
     const [dragActive, setDragActive] = useState(false)
     const [sampleImages, setSampleImages] = useState([])
     const fileRef = useRef()
@@ -20,6 +22,13 @@ export default function Classify({ status, addLog }) {
             .then(data => setSampleImages(data.images || []))
             .catch(() => { })
     }, [])
+
+    useEffect(() => {
+        const backendModelType = status?.model_info?.model_type
+        if (!modelTypeTouched && backendModelType && (backendModelType === 'cnn' || backendModelType === 'efficientnet')) {
+            setModelType(backendModelType)
+        }
+    }, [status?.model_info?.model_type, modelTypeTouched])
 
     const handleFile = (file) => {
         if (!file) return
@@ -54,11 +63,12 @@ export default function Classify({ status, addLog }) {
         if (!imageFile) return
         setLoading(true)
         setResult(null)
-        addLog('Transmitting image for classification...')
+        addLog(`Transmitting image for classification (model=${modelType.toUpperCase()})...`)
 
         try {
             const form = new FormData()
             form.append('image', imageFile)
+            form.append('model_type', modelType)
             const res = await fetch('/api/predict', { method: 'POST', body: form })
             const data = await res.json()
 
@@ -85,6 +95,41 @@ export default function Classify({ status, addLog }) {
             <div className="classify-layout">
                 {/* Left: Upload + Preview */}
                 <div>
+                    <div style={{ marginBottom: 12 }}>
+                        <div className="stat-label mb-16">MODEL</div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                                className={`tactical-btn ${modelType === 'cnn' ? 'tactical-btn--primary' : ''}`}
+                                onClick={() => {
+                                    setModelType('cnn')
+                                    setModelTypeTouched(true)
+                                    addLog('Selected model: CNN')
+                                }}
+                                disabled={loading}
+                                style={{ padding: '10px 12px', fontSize: 11 }}
+                            >
+                                CNN
+                            </button>
+                            <button
+                                className={`tactical-btn ${modelType === 'efficientnet' ? 'tactical-btn--primary' : ''}`}
+                                onClick={() => {
+                                    setModelType('efficientnet')
+                                    setModelTypeTouched(true)
+                                    addLog('Selected model: EFFICIENTNET')
+                                }}
+                                disabled={loading}
+                                style={{ padding: '10px 12px', fontSize: 11 }}
+                            >
+                                EFFICIENTNET
+                            </button>
+                        </div>
+                        <div className="text-dim text-mono" style={{ fontSize: 10, lineHeight: 1.6, marginTop: 8 }}>
+                            {modelType === 'cnn'
+                                ? 'Enhanced CNN (64×64)'
+                                : 'EfficientNetB0 (224×224)'}
+                        </div>
+                    </div>
+
                     {!image ? (
                         <div
                             className={`upload-zone ${dragActive ? 'upload-zone--active' : ''}`}

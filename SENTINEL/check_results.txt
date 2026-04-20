@@ -1,0 +1,47 @@
+SENTINEL - Model Accuracy Comparison
+============================================================
+
+[1] Loading dataset...
+   Loaded from: D:\C M R\sem 6\Academic_projects\model
+   Shape: X=(705, 64, 64, 3), Y=(705,)
+   Urban Land: 166 samples (23.5%)
+   Agricultural Land: 463 samples (65.7%)
+   Forest Land: 76 samples (10.8%)
+   Val set: 141 images
+
+[2] Evaluating EXTERNAL model (model_weights.h5)...
+   EXTERNAL val accuracy: 82.98%
+   EXTERNAL val loss:     0.3557
+
+   Per-class report (EXTERNAL):
+                      precision    recall  f1-score   support
+   
+          Urban Land       1.00      0.42      0.60        33
+   Agricultural Land       0.79      1.00      0.89        93
+         Forest Land       1.00      0.67      0.80        15
+   
+            accuracy                           0.83       141
+           macro avg       0.93      0.70      0.76       141
+        weighted avg       0.86      0.83      0.81       141
+   
+
+   Training history: 20 epochs
+   Final train acc:  91.77%
+
+[3] Evaluating SENTINEL v1 (model_weights.h5)...
+   V1 val accuracy: 82.98%
+   V1 val loss:     0.3557
+
+[4] Evaluating SENTINEL v2 (model_weights_v2.weights.h5)...
+   V2 val accuracy: 10.64%
+   V2 val loss:     2.0423
+
+[5] Comparing datasets...
+   Datasets are IDENTICAL (same X.txt.npy)
+
+[6] Comparing weight files...
+   External model_weights.h5:    6,488,256 bytes
+   SENTINEL model_weights.h5:    6,488,256 bytes
+   -> Same file size -- likely identical weights
+
+============================================================

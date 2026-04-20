@@ -62,18 +62,21 @@ def load_features():
 def load_model():
     """Build model architecture and load pre-trained weights."""
     try:
-        success = classifier.load_weights()
+        data = request.get_json(silent=True) or {}
+        model_type = (data.get("model_type") or "cnn").strip().lower()
+        success = classifier.load_weights(preferred_model_type=model_type)
         if success:
             logger.info(f"Model loaded — accuracy: {classifier.accuracy:.2f}%")
             return jsonify({
                 "success": True,
+                "model_type": classifier.get_model_type(),
                 "accuracy": round(classifier.accuracy, 2),
                 "message": f"Model loaded with {classifier.accuracy:.2f}% accuracy",
             })
         else:
             return jsonify({
                 "success": False,
-                "error": "No pre-trained weights found. Train the model first.",
+                "error": "No pre-trained weights found for the selected model. Train or place weights in the model directory.",
             }), 404
     except Exception as e:
         logger.error(f"Failed to load model: {e}")
@@ -82,7 +85,7 @@ def load_model():
 
 @app.route("/api/model/train", methods=["POST"])
 def train_model():
-    """Train the CNN model with augmentation and validation."""
+    """Train the selected model with augmentation and validation."""
     try:
         if classifier.X is None:
             classifier.load_features()
@@ -90,16 +93,21 @@ def train_model():
         data = request.get_json() or {}
         epochs = data.get("epochs", config.EPOCHS)
         use_augmentation = data.get("augmentation", True)
+        model_type = data.get("model_type", "cnn")
 
-        logger.info(f"Starting training — {epochs} epochs, augmentation={use_augmentation}")
+        logger.info(
+            f"Starting training — model={model_type}, {epochs} epochs, augmentation={use_augmentation}"
+        )
         history = classifier.train(
             epochs=epochs,
             use_augmentation=use_augmentation,
             validation_split=0.2,
+            model_type=model_type,
         )
 
         result = {
             "success": True,
+            "model_type": classifier.get_model_type(),
             "accuracy": round(classifier.accuracy, 2),
             "val_accuracy": round(classifier.val_accuracy, 2),
             "history": {
@@ -123,12 +131,19 @@ def train_model():
 def predict():
     """Classify an uploaded satellite image."""
     try:
-        if not classifier.is_loaded:
-            # Auto-load if weights exist
-            if not classifier.load_weights():
+        requested_model_type = (
+            (request.form.get("model_type") if request.form else None)
+            or request.args.get("model_type")
+            or "cnn"
+        ).strip().lower()
+        if requested_model_type not in {"cnn", "efficientnet"}:
+            return jsonify({"success": False, "error": f"Invalid model_type: {requested_model_type}"}), 400
+
+        if (not classifier.is_loaded) or (classifier.get_model_type() != requested_model_type):
+            if not classifier.load_weights(preferred_model_type=requested_model_type):
                 return jsonify({
                     "success": False,
-                    "error": "Model not loaded. Load or train the model first.",
+                    "error": f"Weights not found for model_type={requested_model_type}. Train or load the model first.",
                 }), 400
 
         if "image" not in request.files:
@@ -158,6 +173,7 @@ def predict():
         return jsonify({
             "success": True,
             "result": result,
+            "model_type": classifier.get_model_type(),
             "overlay_image": f"data:image/jpeg;base64,{img_base64}",
         })
     except Exception as e:
@@ -173,7 +189,7 @@ def get_history():
 
     if history is None:
         # Try loading from file (v2 first, then legacy)
-        for fname in ["history_v2.pckl", "history.pckl"]:
+        for fname in ["history_v3.pckl", "history_v2.pckl", "history.pckl"]:
             path = os.path.join(config.MODEL_DIR, fname)
             if os.path.exists(path):
                 with open(path, "rb") as f:
@@ -218,8 +234,16 @@ def get_metrics():
 def predict_batch():
     """Classify multiple uploaded images."""
     try:
-        if not classifier.is_loaded:
-            if not classifier.load_weights():
+        requested_model_type = (
+            (request.form.get("model_type") if request.form else None)
+            or request.args.get("model_type")
+            or "cnn"
+        ).strip().lower()
+        if requested_model_type not in {"cnn", "efficientnet"}:
+            return jsonify({"success": False, "error": f"Invalid model_type: {requested_model_type}"}), 400
+
+        if (not classifier.is_loaded) or (classifier.get_model_type() != requested_model_type):
+            if not classifier.load_weights(preferred_model_type=requested_model_type):
                 return jsonify({"success": False, "error": "Model not loaded"}), 400
 
         files = request.files.getlist("images")
